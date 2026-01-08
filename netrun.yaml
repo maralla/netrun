@@ -1,0 +1,15 @@
+# netrun configuration
+# Run commands in an isolated network namespace
+
+# Network configuration (optional, sensible defaults provided)
+network:
+  ns_ip: "10.200.1.2/24"
+  host_ip: "10.200.1.1/24"
+
+# Commands to run simultaneously in the namespace
+commands:
+  # - name: http-server
+  #   run: "python3 -m http.server 8080"
+
+  - name: ping-test
+    run: "ping -c 10 10.200.1.1"
