@@ -21,9 +21,11 @@ Usage
 
 ```bash
 # Reads default `run.yaml` from the current directory.
-sudo netrun
+sudo ./target/debug/netrun
 # or
 sudo ./target/debug/netrun -c config.yaml
+# or
+sudo ./target/debug/netrun python -m http.server 8000
 ```
 
 Config
