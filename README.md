@@ -20,7 +20,7 @@ Usage
 -----
 
 ```bash
-# Reads default `netrun.yaml` from the current directory.
+# Reads default `run.yaml` from the current directory.
 sudo netrun
 # or
 sudo ./target/debug/netrun -c config.yaml
@@ -29,7 +29,7 @@ sudo ./target/debug/netrun -c config.yaml
 Config
 ------
 
-Create a YAML file (e.g., `netrun.yaml`) with your network settings and commands:
+Create a YAML file (e.g., `run.yaml`) with your network settings and commands:
 
 ```yaml
 network:

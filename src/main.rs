@@ -15,15 +15,25 @@ use serde::Deserialize;
 use ipnet::IpNet;
 use tokio::runtime::{Builder, Runtime};
 
-const DEFAULT_NS_IP: &str = "10.200.1.2/24";
-const DEFAULT_HOST_IP: &str = "10.200.1.1/24";
+const DEFAULT_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 200, 1, 1);
 
 #[derive(Parser)]
 #[command(name = "netrun")]
 #[command(about = "Run commands in an isolated network namespace")]
 struct Cli {
-    #[arg(short, long, default_value = "netrun.yaml")]
+    /// Explicitly set a YAML config file for commands to run.
+    #[arg(short, long, default_value = "run.yaml")]
     config: PathBuf,
+
+    /// Explicitly set a network for the namespace, e.g: 10.200.1.1/24.
+    /// The network in the isolated namespace is this address with last part increased by 1.
+    #[arg(short, long, default_value = "")]
+    network: String,
+
+    /// The command to to run in the namespace.
+    /// This command will replace commands in YAML config.
+    #[arg(allow_hyphen_values = true)]
+    args: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +41,62 @@ struct Config {
     #[serde(default)]
     network: NetworkConfig,
     commands: Vec<CommandConfig>,
+
+    #[serde(skip)]
+    host_network: ParsedNetwork,
+
+    #[serde(skip)]
+    ns_network: ParsedNetwork,
+}
+
+impl Config {
+    fn normalize_network(&mut self, network: &str) -> Result<()> {
+        if !network.is_empty() {
+            let (ip, prefix) = parse_ip_prefix(network)?;
+            self.host_network = ParsedNetwork{ ip, prefix };
+            self.ns_network = Self::gen_network_from(&self.host_network);
+
+            return Ok(())
+        }
+
+        if !self.network.host_ip.is_empty() {
+            let (ip, prefix) = parse_ip_prefix(&self.network.host_ip)?;
+            self.host_network = ParsedNetwork{ ip, prefix };
+        }
+
+        if self.network.ns_ip.is_empty() {
+            self.ns_network = Self::gen_network_from(&self.host_network);
+        } else {
+            let (ip, prefix) = parse_ip_prefix(&self.network.ns_ip)?;
+            self.ns_network = ParsedNetwork{ ip, prefix };
+        }
+
+        Ok(())
+    }
+
+    fn gen_network_from(network: &ParsedNetwork) -> ParsedNetwork {
+        let mut parts = network.ip.octets();
+        parts[3] = parts[3].wrapping_add(1);
+
+        let ip = Ipv4Addr::from(parts);
+
+        return ParsedNetwork{ ip, prefix: network.prefix };
+    }
+}
+
+#[derive(Debug)]
+struct ParsedNetwork {
+    ip: Ipv4Addr,
+    prefix: u8,
+}
+
+impl Default for ParsedNetwork {
+    fn default() -> Self {
+        Self {
+            ip: DEFAULT_ADDRESS,
+            prefix: 24,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -39,15 +105,6 @@ struct NetworkConfig {
     ns_ip: String,
     #[serde(default)]
     host_ip: String,
-}
-
-impl NetworkConfig {
-    fn ns_ip(&self) -> &str {
-        if self.ns_ip.is_empty() { DEFAULT_NS_IP } else { &self.ns_ip }
-    }
-    fn host_ip(&self) -> &str {
-        if self.host_ip.is_empty() { DEFAULT_HOST_IP } else { &self.host_ip }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,14 +133,11 @@ fn run(rt: &Runtime, ctx: &netns::NetNS, config: Config) -> Result<()> {
         return Err(anyhow!("Must be run as root"));
     }
 
-    let (host_ip, host_prefix) = parse_ip_prefix(config.network.host_ip())?;
-    let (ns_ip, ns_prefix) = parse_ip_prefix(config.network.ns_ip())?;
-
     let veth_config = netns::VethConfig {
-        host_ip,
-        host_prefix,
-        ns_ip,
-        ns_prefix,
+        host_ip: config.host_network.ip,
+        host_prefix: config.host_network.prefix,
+        ns_ip: config.ns_network.ip,
+        ns_prefix: config.ns_network.prefix,
     };
 
     // Signal handler: count signals for graceful/force shutdown
@@ -141,7 +195,14 @@ fn load_config(path: &std::path::Path) -> Result<Config> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let config = load_config(&cli.config)?;
+    let mut config = load_config(&cli.config)?;
+
+    if !cli.args.is_empty() {
+        let command = cli.args.join(" ");
+        config.commands = vec![CommandConfig{ name: "".to_string(), run: command }];
+    }
+
+    config.normalize_network(&cli.network)?;
 
     let rt = Builder::new_current_thread()
         .enable_all()
